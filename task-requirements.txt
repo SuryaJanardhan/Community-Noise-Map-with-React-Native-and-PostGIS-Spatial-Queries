@@ -1,0 +1,312 @@
+Objective
+Build a full-stack mobile application for crowdsourcing and visualizing urban noise pollution. You will learn to integrate device hardware (microphone) using React Native, design a REST API with Node.js, and manage complex geospatial data with PostGIS. This project is highly relevant for roles in civic tech, IoT, and data visualization, where handling real-world sensor data and performing efficient spatial queries are critical skills.
+
+Description
+1. Project Overview and Background
+Urban noise pollution is a significant environmental issue affecting public health and quality of life. Traditional noise monitoring relies on a few expensive, fixed sensors, providing limited coverage. A modern approach is to use crowdsourcing, empowering citizens to collect data using their smartphones. This project challenges you to build such a system, combining a mobile frontend for data collection with a powerful geospatial backend for storage and analysis.
+
+You will create a React Native application that allows users to capture a snapshot of the ambient noise level using their device's microphone. This reading, along with their current GPS location, is sent to a backend server. The backend, built with Node.js and Express, will store this data in a PostgreSQL database enhanced with the PostGIS extension. PostGIS is a critical technology for this task, as it provides specialized data types and functions for storing and querying geographic information efficiently. The frontend will then visualize the aggregated data on an interactive map, rendering a heatmap that reveals noise hotspots across the city. This project provides a practical, end-to-end experience in building a data-driven, location-aware application.
+
+2. Core Technologies Deep Dive
+A. React Native & Expo
+React Native is a popular framework for building cross-platform mobile applications using JavaScript and React. We'll use the Expo managed workflow to simplify the development process, abstracting away complex native build configurations.
+
+Why Expo? Expo provides a suite of tools and services that accelerate development. Its libraries, like expo-av and expo-location, offer simple JavaScript APIs to access native device features like the microphone and GPS, which are essential for our app.
+expo-av for Audio: This library is central to our data capture feature. You'll use it to request microphone permissions, start an audio recording session, and, most importantly, enable audio metering. The metering feature provides real-time amplitude data from the microphone's input, which is the raw value you'll need to calculate the decibel level.
+react-native-maps for Visualization: To display the noise data, you'll use this widely-used library. It provides a <MapView> component that can render maps from providers like OpenStreetMap (or Google Maps). Crucially, it also offers a <Heatmap> overlay component, which is perfect for visualizing the density and intensity of noise readings.
+B. Node.js & Express
+Node.js will serve as our backend runtime, and Express will be the web framework used to create a simple and robust REST API. The backend acts as the crucial intermediary between the mobile app and the database.
+
+Role of the API: The API will expose endpoints for two primary functions: receiving and storing new noise readings from users, and serving processed geospatial data to the app for visualization. This separation of concerns is a fundamental architectural pattern.
+Middleware: You will implement Express middleware for tasks like rate limiting. This is a critical production-readiness feature to prevent abuse, such as a single user spamming the database with thousands of readings.
+C. PostgreSQL & PostGIS
+This is the heart of the backend's data layer. While PostgreSQL is a powerful object-relational database, the PostGIS extension transforms it into a full-fledged geospatial database.
+
+What is PostGIS? PostGIS extends PostgreSQL with support for geographic objects and allows you to run location-based queries directly in the database. This is vastly more efficient and powerful than fetching all data and filtering it in your application code.
+The GEOMETRY Type: Instead of storing latitude and longitude in separate float columns, you'll use the PostGIS GEOMETRY type. Specifically, you will store location data as a POINT with a specific Spatial Reference System Identifier (SRID), typically 4326, which corresponds to the WGS 84 standard used by GPS.
+Spatial Indexing (GiST): Querying geospatial data can be slow without proper indexing. You will create a GiST (Generalized Search Tree) index on your geometry column. This allows the database to perform incredibly fast lookups for queries like "find all points within this bounding box" or "find all points within a 500-meter radius of this coordinate."
+Key Functions: You will primarily use ST_DWithin, a PostGIS function that efficiently finds all geometries within a specified distance of another geometry. This is the correct tool for finding readings "nearby" a certain point, as it can leverage the spatial index for high performance. You will also use aggregate functions like ST_MakeEnvelope and AVG() to calculate statistics for a specific map area.
+3. System Architecture and Data Flow
+The system consists of three main components: the React Native client, the Node.js API server, and the PostGIS database. Understanding the flow of data is key to building the application correctly.
+
+Here is a diagram illustrating the primary user flows:
+
+Expand
+PostGIS Database
+Node.js/Express API
+React Native App
+PostGIS Database
+Node.js/Express API
+React Native App
+Flow 1: User Submits a Reading
+Flow 2: User Views the Map
+Flow 3: User Taps Map for Report
+POST /api/readings (lat, lng, decibels)
+Apply Rate Limiting Middleware
+INSERT INTO readings (location, decibel_level)
+Success
+201 Created
+GET /api/readings/heatmap (lat, lng, radius, time_filter)
+SELECT * FROM readings WHERE ST_DWithin(...)
+Return list of readings
+200 OK with JSON data
+Render Heatmap with data
+GET /api/readings/report (bbox)
+SELECT AVG(db), MAX(db), COUNT(*) WHERE location && ST_MakeEnvelope(...)
+Return aggregate stats
+200 OK with JSON report
+This architecture ensures a clean separation of concerns: the client handles UI and device interaction, the server handles business logic and data access, and the database specializes in efficient storage and retrieval of complex geospatial data.
+
+4. Step-by-Step Implementation Guide
+Phase 1: Backend Setup and Database Schema
+Your first step is to establish the foundation of the application: the containerized backend environment and the database structure.
+
+Docker Compose: Create a docker-compose.yml file. It should define two services: db and api.
+The db service should use an image with PostGIS, such as postgis/postgis. Mount a local ./db/migration.sql file to /docker-entrypoint-initdb.d/ to automatically initialize the schema on startup. Define a healthcheck to ensure the database is ready before the API starts.
+The api service will be built from a Dockerfile in your project root. It should depend on the db service (depends_on).
+Database Migration: Create the db/migration.sql file. This file will define the readings table.
+-- Enable PostGIS extension
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+-- Create the readings table
+CREATE TABLE readings (
+    id SERIAL PRIMARY KEY,
+    decibel_level FLOAT NOT NULL,
+    location GEOMETRY(Point, 4326) NOT NULL, -- SRID 4326 for GPS coordinates
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create a spatial index for fast location-based queries
+CREATE INDEX readings_location_idx ON readings USING GIST (location);
+Environment: Create a .env.example file listing all necessary environment variables, such as DATABASE_URL and PORT.
+Phase 2: Backend API Endpoints
+With the database ready, implement the Express API to interact with it.
+
+Submit Reading (POST /api/readings): This endpoint will receive a new reading. It should parse the latitude, longitude, and decibel values from the request body. Use a library like pg or an ORM that supports PostGIS to construct a query that inserts a POINT geometry.
+Rate Limiting Middleware: Implement a simple in-memory rate limiter. A Map object can store IP addresses as keys and a timestamp of their last request as values. Before processing a submission, check if the IP exists in the map and if the last request was less than a minute ago. If so, return a 429 Too Many Requests error.
+Heatmap Data (GET /api/readings/heatmap): This endpoint is for fetching data for the map view. It should accept lat, lng, radius, and an optional time_filter query parameter. The core of this endpoint is the PostGIS query:
+-- Example query for ST_DWithin
+SELECT latitude(location), longitude(location), decibel_level as weight
+FROM readings
+WHERE ST_DWithin(
+    location,
+    ST_MakePoint(:lng, :lat)::geography, -- Note: lng comes first
+    :radius -- radius in meters
+);
+You'll need to add a WHERE clause for the time_filter based on the created_at column.
+Area Report (GET /api/readings/report): This endpoint calculates statistics for a given bounding box. It will receive the box's corners (minLng, minLat, maxLng, maxLat). The query will use ST_MakeEnvelope to create a geometry representing the box and then calculate aggregates.
+Phase 3: React Native Frontend - Data Capture
+Now, switch to the frontend to build the user-facing part of the app.
+
+Permissions: Use expo-location to get the user's current position and expo-av to request microphone permissions.
+Audio Metering: Configure expo-av's Audio.Recording to enable metering. The getStatusAsync method on a recording object will return a metering value, which is the audio amplitude in dBFS (decibels relative to full scale). This value is typically negative (e.g., -60 to 0).
+Decibel Calculation: The metering value is not a direct measure of Sound Pressure Level (SPL), which is what we want. A simplified conversion can be done by adding a calibration offset. SPL ≈ dBFS + CalibrationOffset. For this project, you must research and choose a reasonable offset (e.g., 90-100) and document your choice in docs/db_derivation.md. Explain that this is an approximation and why real-world measurements are more complex.
+UI: Create a simple UI with a button to "Take Reading". When pressed, it should get the location, start a brief recording to get a metering value, calculate the dB SPL, and then call the POST /api/readings endpoint to submit the data.
+Phase 4: React Native Frontend - Map & Visualization
+This is where you bring the data to life.
+
+Map Setup: Add react-native-maps to your project and render a <MapView>. Set its initial region to a location of your choice.
+Data Fetching: In a useEffect hook, fetch data from your /api/readings/heatmap endpoint. You'll need the map's current center coordinates and a radius (you can derive this from the map's viewport region).
+Viewport-Based Loading: The map should not just load data once. Implement lazy loading by attaching a handler to the <MapView>'s onRegionChangeComplete event. This function receives the new map region. Use this new region's center and span to re-trigger the API call, fetching fresh data for the new view. This is crucial for performance with large datasets.
+Heatmap Rendering: Pass the array of fetched data points (formatted as {latitude, longitude, weight}) to the <Heatmap> component, which you'll render as a child of the <MapView>.
+Phase 5: Advanced Features
+Finally, add the filtering and reporting functionality to make the app more interactive.
+
+Time Filter: Add UI elements (e.g., buttons or a dropdown) for "Last Hour," "Last 24 Hours," and "All Time." When the user selects an option, update a state variable. This variable should be passed as the time_filter query parameter in your API calls to the heatmap endpoint, causing the map to update with the filtered data.
+Area Report: Implement an onPress handler for the <MapView>. When the user taps the map, you can define a small bounding box around the tapped coordinate. Send these bounding box coordinates to your /api/readings/report endpoint. Display the returned statistics (average dB, peak dB, count) in a modal or an overlay on the screen.
+5. FAQ
+Q: How do I set up PostGIS in Docker?
+
+A: Use the official postgis/postgis image. The docker-compose.yml entry is straightforward. Ensure you set POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD environment variables. Refer to the Docker Hub page for postgis for more options. PostGIS Docker Image Documentation
+Q: My spatial query is slow or not working. What should I check?
+
+A: First, verify you created a GiST index on the geometry column. Second, ensure your coordinates are in the correct order for PostGIS functions (longitude, then latitude). Third, make sure you are using the ::geography type cast when using ST_DWithin with distances in meters, as this calculates distances on the Earth's surface correctly. PostGIS ST_DWithin Documentation
+Q: The decibel calculation seems arbitrary. How can I make it better?
+
+A: The simple offset is an approximation. A true scientific measurement requires calibrating the specific device's microphone against a known sound source. For this project, the goal is to demonstrate you understand the concept of calibration, not to achieve perfect accuracy. Your written explanation is more important than the exact value you choose. Acoustics Stack Exchange on Phone dB Measurement
+Q: I'm getting CORS errors when my app calls the API.
+
+A: Your Express server needs to enable Cross-Origin Resource Sharing. Use the cors npm package as middleware in your Express app. app.use(cors()); is usually sufficient for development. Express CORS Middleware
+Core Requirements
+1.
+The project must be fully containerized using Docker Compose for easy setup and evaluation.
+
+File Location: docker-compose.yml at the repository root.
+
+Required Services:
+
+api: The Node.js application service, built from a Dockerfile.
+db: The PostgreSQL + PostGIS database service, using an image like postgis/postgis.
+Requirements:
+
+The api service must have a healthcheck to ensure the server is running.
+The db service must have a healthcheck using pg_isready.
+The api service must use depends_on to wait for the db service to be healthy before starting.
+The db service must automatically run the schema migration located at ./db/migration.sql on its first startup.
+Verification:
+
+Run docker-compose up --build.
+Verify that both api and db services start and become healthy within 3 minutes.
+Verify that no manual database migration steps are needed.
+2.
+The PostgreSQL database must contain a readings table with the correct schema and a spatial index for performance.
+
+File Location: db/migration.sql
+
+readings Table Schema:
+
+Column	Type	Constraints
+id	SERIAL	PRIMARY KEY
+decibel_level	FLOAT	NOT NULL
+location	GEOMETRY(Point, 4326)	NOT NULL
+created_at	TIMESTAMP WITH TIME ZONE	DEFAULT NOW()
+Spatial Index:
+
+A GIST index must be created on the location column.
+Verification:
+
+After docker-compose up, connect to the database.
+Verify the readings table exists and matches the specified schema.
+Run a command like \d readings in psql to check indexes and confirm the GiST index exists on the location column.
+3.
+The backend must expose an endpoint to accept and store new noise readings.
+
+Endpoint: POST /api/readings
+
+Request Body Schema:
+
+{
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "decibel": 75.2
+}
+Response (201 Created):
+
+{
+  "status": "success",
+  "id": 123
+}
+Verification:
+
+Send a POST request to /api/readings with a valid JSON body.
+Verify the HTTP status code is 201.
+Verify the response body contains the ID of the newly created record.
+Query the database to confirm the new reading was inserted correctly as a POINT geometry.
+4.
+The reading submission endpoint must be rate-limited to one request per minute per client IP address.
+
+Endpoint: POST /api/readings
+
+Behavior:
+
+A second request from the same IP within 60 seconds of a successful submission must be rejected.
+Response (429 Too Many Requests):
+
+{
+  "error": "Too many requests. Please wait a minute before submitting again."
+}
+Verification:
+
+Send a successful POST request to /api/readings.
+Immediately send a second POST request from the same client.
+Verify the response status code is 429.
+Wait 61 seconds and send a third POST request. Verify it succeeds with a 201 status.
+5.
+The backend must provide an endpoint to fetch noise readings for the map's heatmap view, filtered by distance and time.
+
+Endpoint: GET /api/readings/heatmap
+
+Query Parameters:
+
+lat (number, required): Latitude of the map center.
+lng (number, required): Longitude of the map center.
+radius (number, required): Search radius in meters.
+time_filter (string, optional): One of "hour", "day", or "all". Defaults to "all".
+Response (200 OK):
+
+[
+  {
+    "latitude": 40.7128,
+    "longitude": -74.0060,
+    "weight": 65.5
+  }
+]
+Verification:
+
+Seed the database with known readings at various locations and times.
+Send a GET request with specific lat, lng, and radius parameters.
+Verify the response is an array and that it only contains points within the specified geographic radius.
+Test the time_filter parameter by sending requests for "hour" and "day" and verifying that the returned data is correctly filtered by its created_at timestamp.
+6.
+The backend must provide an endpoint that computes aggregate statistics for a given map bounding box.
+
+Endpoint: GET /api/readings/report
+
+Query Parameters:
+
+minLng, minLat, maxLng, maxLat (all number, required): The coordinates of the bounding box.
+Response (200 OK):
+
+{
+  "averageDecibel": 68.4,
+  "peakDecibel": 85.1,
+  "readingCount": 42
+}
+Verification:
+
+Seed the database with a known set of readings.
+Send a GET request with bounding box parameters that enclose a subset of the readings.
+Verify the response status is 200.
+Verify the averageDecibel, peakDecibel, and readingCount values in the response are mathematically correct for the readings within that bounding box.
+7.
+A document must be provided that explains the methodology for converting microphone amplitude to a decibel reading.
+
+File Location: docs/db_derivation.md
+
+Required Content:
+
+A brief explanation of why raw microphone amplitude (dBFS) is not the same as Sound Pressure Level (SPL).
+A clear statement of the calibration offset value you chose for the formula SPL ≈ dBFS + CalibrationOffset.
+A short rationale for why you chose that specific offset value.
+Verification:
+
+Check for the existence of the docs/db_derivation.md file.
+Parse the markdown file to ensure it contains the required sections and a numerical value for the offset.
+8.
+The React Native application must contain specific UI elements with data-testid attributes for automated testing.
+
+Required Elements:
+
+Take Reading Button: A button to initiate the noise measurement process, with data-testid="take-reading-button".
+Decibel Display: A text element that shows the most recent dB reading, with data-testid="db-reading-display".
+Map View: The main map component, with data-testid="map-view".
+Time Filter Controls: Buttons for filtering by time, with data-testid attributes: "time-filter-hour", "time-filter-day", "time-filter-all".
+Area Report Display: A container that becomes visible after tapping the map to show the area report, with data-testid="area-report-container".
+Verification:
+
+Launch the application in a simulator.
+Use a testing utility to query for elements by their data-testid and confirm their existence in the component tree.
+9.
+The map must dynamically reload data from the backend as the user pans and zooms.
+
+Behavior:
+
+The application must make an API call to the /api/readings/heatmap endpoint when the app first loads.
+When the user finishes panning or zooming the map (onRegionChangeComplete event), the app must make a new API call to the same endpoint with updated latitude, longitude, and radius parameters reflecting the new viewport.
+Verification: This can be verified by instrumenting the app or by observing network traffic. A mock API can be used to confirm that the onRegionChangeComplete event triggers a new network request with correctly updated query parameters.
+
+Submission Instructions
+Your submission must be a Git repository containing all project code and required artifacts. Please ensure the following items are present:
+
+Application Code: All source code for the React Native frontend and the Node.js backend.
+docker-compose.yml: The file to orchestrate the backend services (API and database).
+Dockerfile: The file to build the Node.js API container.
+.env.example: A file documenting ALL environment variables required to run the application, with placeholder values.
+SQL Migration File: A file located at db/migration.sql that contains the SQL statements to create the necessary tables and indexes.
+Written Explanation: A markdown file at docs/db_derivation.md explaining your approach to calculating the decibel reading and the rationale for your chosen calibration offset.
+Evaluation Overview
+Your submission will be evaluated based on functionality, code quality, and adherence to best practices. Our process includes:
+
+Automated Testing: We will run automated tests against your running application to verify that all functional requirements specified in the core_requirements section are met. This includes checking API endpoints, database schema, and frontend component behavior based on the provided contracts.
+Automated Code Analysis: Your source code will be analyzed for quality, maintainability, and adherence to common software engineering best practices. We will assess code structure, error handling, and security considerations like the implementation of rate limiting.
+Setup and Configuration Review: We will verify the docker-compose.yml configuration and ensure your application can be set up and run with a single command (docker-compose up). The clarity and completeness of your .env.example file will also be assessed.
