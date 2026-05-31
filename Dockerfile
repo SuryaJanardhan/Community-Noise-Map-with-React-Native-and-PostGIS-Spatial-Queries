@@ -1,13 +1,11 @@
-FROM node:20-alpine
-
-WORKDIR /app
-
-COPY api/package*.json ./api/
-RUN cd api && npm ci
-
-COPY api ./api
+FROM node:20
 
 WORKDIR /app/api
+
+COPY api/package*.json ./
+RUN npm install --omit=dev
+
+COPY api ./
 
 EXPOSE 3000
 

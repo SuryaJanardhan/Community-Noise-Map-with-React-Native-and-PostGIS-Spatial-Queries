@@ -23,11 +23,9 @@ services:
     container_name: community-noise-map-api
     environment:
       PORT: ${PORT:-3000}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/noise_map}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@db:5432/noise_map}
     ports:
       - "3000:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
