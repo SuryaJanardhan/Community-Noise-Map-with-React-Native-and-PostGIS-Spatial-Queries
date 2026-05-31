@@ -1,13 +1,11 @@
 FROM node:20-alpine
 
-WORKDIR /app
-
-COPY api/package*.json ./api/
-RUN cd api && npm ci
-
-COPY api ./api
-
 WORKDIR /app/api
+
+COPY api/package*.json ./
+RUN npm ci
+
+COPY api ./
 
 EXPOSE 3000
 
