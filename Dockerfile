@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY api/package.json ./api/package.json
-RUN cd api && npm install
+COPY api/package*.json ./api/
+RUN cd api && npm ci
 
 COPY api ./api
 

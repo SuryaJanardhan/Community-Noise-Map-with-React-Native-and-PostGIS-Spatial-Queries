@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 const dotenv = require('dotenv');
 
@@ -12,6 +13,14 @@ app.use(express.json());
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+
+const generalApiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', generalApiLimiter);
 
 const successfulSubmissionByIp = new Map();
 const ONE_MINUTE_MS = 60 * 1000;
@@ -31,13 +40,8 @@ const getTimeFilterClause = (timeFilter) => {
   return '';
 };
 
-app.get('/health', async (_req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.status(200).json({ status: 'ok' });
-  } catch (_error) {
-    res.status(503).json({ status: 'database_unavailable' });
-  }
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
 });
 
 app.post('/api/readings', async (req, res) => {
@@ -76,6 +80,8 @@ app.post('/api/readings', async (req, res) => {
       id: result.rows[0].id,
     });
   } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to store reading:', error);
     return res.status(500).json({ error: 'Failed to store reading.' });
   }
 });
@@ -88,7 +94,7 @@ app.get('/api/readings/heatmap', async (req, res) => {
 
   if (lat === null || lng === null || radius === null || radius <= 0) {
     return res.status(400).json({
-      error: 'lat, lng, and radius are required query parameters.',
+      error: 'lat and lng are required, and radius must be a positive number.',
     });
   }
 
@@ -117,6 +123,8 @@ app.get('/api/readings/heatmap', async (req, res) => {
     const result = await pool.query(sql, [lng, lat, radius]);
     return res.status(200).json(result.rows);
   } catch (_error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to fetch heatmap readings:', _error);
     return res.status(500).json({ error: 'Failed to fetch heatmap readings.' });
   }
 });
@@ -152,6 +160,8 @@ app.get('/api/readings/report', async (req, res) => {
       readingCount: row.reading_count,
     });
   } catch (_error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to generate area report:', _error);
     return res.status(500).json({ error: 'Failed to generate area report.' });
   }
 });

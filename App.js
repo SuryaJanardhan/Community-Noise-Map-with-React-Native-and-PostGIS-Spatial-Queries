@@ -5,7 +5,10 @@ import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
-const CALIBRATION_OFFSET = Number(process.env.CALIBRATION_OFFSET || 95);
+const CALIBRATION_OFFSET = Number(process.env.EXPO_PUBLIC_CALIBRATION_OFFSET || 95);
+const RECORDING_DURATION_MS = 700;
+const DEFAULT_DBFS_FALLBACK = -60;
+const REPORT_AREA_DELTA_DEGREES = 0.005;
 
 const INITIAL_REGION = {
   latitude: 40.7128,
@@ -93,11 +96,11 @@ export default function App() {
     });
 
     await recording.startAsync();
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await new Promise((resolve) => setTimeout(resolve, RECORDING_DURATION_MS));
     await recording.stopAndUnloadAsync();
     const status = await recording.getStatusAsync();
 
-    const dbfs = typeof status.metering === 'number' ? status.metering : -60;
+    const dbfs = typeof status.metering === 'number' ? status.metering : DEFAULT_DBFS_FALLBACK;
     const decibel = Number((dbfs + CALIBRATION_OFFSET).toFixed(1));
     setLatestReading(decibel.toFixed(1));
 
@@ -118,12 +121,11 @@ export default function App() {
 
   const onMapPress = useCallback(async (event) => {
     const { latitude, longitude } = event.nativeEvent.coordinate;
-    const delta = 0.005;
     const params = new URLSearchParams({
-      minLng: String(longitude - delta),
-      minLat: String(latitude - delta),
-      maxLng: String(longitude + delta),
-      maxLat: String(latitude + delta),
+      minLng: String(longitude - REPORT_AREA_DELTA_DEGREES),
+      minLat: String(latitude - REPORT_AREA_DELTA_DEGREES),
+      maxLng: String(longitude + REPORT_AREA_DELTA_DEGREES),
+      maxLat: String(latitude + REPORT_AREA_DELTA_DEGREES),
     });
 
     const response = await fetch(`${API_BASE_URL}/api/readings/report?${params.toString()}`);
