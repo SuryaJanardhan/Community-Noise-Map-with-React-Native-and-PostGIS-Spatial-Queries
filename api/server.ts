@@ -1,8 +1,10 @@
-const express = require('express');
-const cors = require('cors');
-const rateLimit = require('express-rate-limit');
-const { Pool } = require('pg');
-const dotenv = require('dotenv');
+import express, { Request, Response } from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import pg from 'pg';
+import dotenv from 'dotenv';
+
+const { Pool } = pg;
 
 dotenv.config();
 
@@ -23,7 +25,7 @@ const generalApiLimiter = rateLimit({
 });
 app.use('/api', generalApiLimiter);
 
-const successfulSubmissionByIp = new Map();
+const successfulSubmissionByIp = new Map<string, number>();
 const ONE_MINUTE_MS = 60 * 1000;
 
 // Clean up expired IP timestamps periodically to prevent memory leaks
@@ -36,12 +38,12 @@ setInterval(() => {
   }
 }, 60 * 1000).unref();
 
-const parseNumber = (value) => {
+const parseNumber = (value: any): number | null => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const getTimeFilterClause = (timeFilter) => {
+const getTimeFilterClause = (timeFilter: string): string => {
   if (timeFilter === 'hour') {
     return "AND created_at >= NOW() - INTERVAL '1 hour'";
   }
@@ -51,11 +53,17 @@ const getTimeFilterClause = (timeFilter) => {
   return '';
 };
 
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({ status: 'ok' });
 });
 
-app.post('/api/readings', async (req, res) => {
+interface ReadingRequestBody {
+  latitude?: any;
+  longitude?: any;
+  decibel?: any;
+}
+
+app.post('/api/readings', async (req: Request<{}, any, ReadingRequestBody>, res: Response) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   const lastSuccessfulSubmission = successfulSubmissionByIp.get(ip);
@@ -97,7 +105,14 @@ app.post('/api/readings', async (req, res) => {
   }
 });
 
-app.get('/api/readings/heatmap', async (req, res) => {
+interface HeatmapRequestQuery {
+  lat?: string;
+  lng?: string;
+  radius?: string;
+  time_filter?: string;
+}
+
+app.get('/api/readings/heatmap', async (req: Request<{}, any, any, HeatmapRequestQuery>, res: Response) => {
   const lat = parseNumber(req.query.lat);
   const lng = parseNumber(req.query.lng);
   const radius = parseNumber(req.query.radius);
@@ -115,9 +130,6 @@ app.get('/api/readings/heatmap', async (req, res) => {
     });
   }
 
-  // Optimize query: calculate degree-based bounding box in JS
-  // 1 degree of latitude is ~111,000 meters.
-  // 1 degree of longitude is ~111,000 * cos(lat) meters.
   const deltaLat = radius / 111000;
   const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
   const deltaLng = radius / (111000 * cosLat);
@@ -128,9 +140,6 @@ app.get('/api/readings/heatmap', async (req, res) => {
   const maxLat = lat + deltaLat;
 
   try {
-    // By using the location && ST_MakeEnvelope geometry bounding box check,
-    // PostgreSQL will utilize the GiST spatial index 'readings_location_idx' on the location column,
-    // bypassing the performance penalty of casting the column to geography directly.
     const sql = `
       SELECT
         ST_Y(location) AS latitude,
@@ -156,7 +165,14 @@ app.get('/api/readings/heatmap', async (req, res) => {
   }
 });
 
-app.get('/api/readings/report', async (req, res) => {
+interface ReportRequestQuery {
+  minLng?: string;
+  minLat?: string;
+  maxLng?: string;
+  maxLat?: string;
+}
+
+app.get('/api/readings/report', async (req: Request<{}, any, any, ReportRequestQuery>, res: Response) => {
   const minLng = parseNumber(req.query.minLng);
   const minLat = parseNumber(req.query.minLat);
   const maxLng = parseNumber(req.query.maxLng);

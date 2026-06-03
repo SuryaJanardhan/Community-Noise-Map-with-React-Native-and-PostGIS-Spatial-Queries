@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, StatusBar } from 'react-native';
-import MapView, { Heatmap } from 'react-native-maps';
+import MapView, { Heatmap, MapPressEvent } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
 
@@ -10,24 +10,43 @@ const RECORDING_DURATION_MS = 700;
 const DEFAULT_DBFS_FALLBACK = -60;
 const REPORT_AREA_DELTA_DEGREES = 0.005;
 
-const INITIAL_REGION = {
+interface Region {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
+
+interface HeatmapPoint {
+  latitude: number;
+  longitude: number;
+  weight: number;
+}
+
+interface AreaReport {
+  averageDecibel: number | null;
+  peakDecibel: number | null;
+  readingCount: number;
+}
+
+const INITIAL_REGION: Region = {
   latitude: 40.7128,
   longitude: -74.006,
   latitudeDelta: 0.08,
   longitudeDelta: 0.08,
 };
 
-const deriveRadiusMeters = (region) => Math.max((region.longitudeDelta * 111320) / 2, 100);
+const deriveRadiusMeters = (region: Region): number => Math.max((region.longitudeDelta * 111320) / 2, 100);
 
 export default function App() {
-  const [region, setRegion] = useState(INITIAL_REGION);
-  const [timeFilter, setTimeFilter] = useState('all');
-  const [heatmapPoints, setHeatmapPoints] = useState([]);
-  const [latestReading, setLatestReading] = useState('--');
-  const [areaReport, setAreaReport] = useState(null);
-  const [isRecording, setIsRecording] = useState(false);
+  const [region, setRegion] = useState<Region>(INITIAL_REGION);
+  const [timeFilter, setTimeFilter] = useState<'hour' | 'day' | 'all'>('all');
+  const [heatmapPoints, setHeatmapPoints] = useState<HeatmapPoint[]>([]);
+  const [latestReading, setLatestReading] = useState<string>('--');
+  const [areaReport, setAreaReport] = useState<AreaReport | null>(null);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
 
-  const fetchHeatmap = useCallback(async (currentRegion, currentTimeFilter) => {
+  const fetchHeatmap = useCallback(async (currentRegion: Region, currentTimeFilter: 'hour' | 'day' | 'all') => {
     try {
       const radius = deriveRadiusMeters(currentRegion);
       const params = new URLSearchParams({
@@ -42,7 +61,7 @@ export default function App() {
         throw new Error('Failed to load heatmap data.');
       }
 
-      const data = await response.json();
+      const data: Array<{ latitude: string | number; longitude: string | number; weight: string | number }> = await response.json();
       setHeatmapPoints(
         data.map((point) => ({
           latitude: Number(point.latitude),
@@ -50,7 +69,7 @@ export default function App() {
           weight: Number(point.weight),
         }))
       );
-    } catch (error) {
+    } catch (error: any) {
       console.warn(error.message);
       setHeatmapPoints([]);
     }
@@ -103,7 +122,7 @@ export default function App() {
         isMeteringEnabled: true,
       });
 
-      const samples = [];
+      const samples: number[] = [];
       recording.setOnRecordingStatusUpdate((status) => {
         if (status && typeof status.metering === 'number') {
           samples.push(status.metering);
@@ -154,7 +173,7 @@ export default function App() {
     }
   }, [fetchHeatmap, region, timeFilter]);
 
-  const onMapPress = useCallback(async (event) => {
+  const onMapPress = useCallback(async (event: MapPressEvent) => {
     try {
       const { latitude, longitude } = event.nativeEvent.coordinate;
       const params = new URLSearchParams({
@@ -169,7 +188,7 @@ export default function App() {
         return;
       }
 
-      const report = await response.json();
+      const report: AreaReport = await response.json();
       setAreaReport(report);
     } catch (err) {
       console.warn('Error loading report:', err);
@@ -178,7 +197,7 @@ export default function App() {
 
   const heatmapData = useMemo(() => heatmapPoints, [heatmapPoints]);
 
-  const getGaugeColor = (dbVal) => {
+  const getGaugeColor = (dbVal: string): string => {
     if (dbVal === '--') return '#64748B';
     const val = Number(dbVal);
     if (val < 55) return '#10B981';

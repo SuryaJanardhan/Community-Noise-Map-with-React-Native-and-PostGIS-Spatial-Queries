@@ -16,5 +16,9 @@
     "react": "18.2.0",
     "react-native": "0.74.5",
     "react-native-maps": "1.14.0"
+  },
+  "devDependencies": {
+    "@types/react": "~18.2.45",
+    "typescript": "^5.1.3"
   }
 }
