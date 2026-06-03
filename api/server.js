@@ -7,6 +7,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 
@@ -24,6 +25,16 @@ app.use('/api', generalApiLimiter);
 
 const successfulSubmissionByIp = new Map();
 const ONE_MINUTE_MS = 60 * 1000;
+
+// Clean up expired IP timestamps periodically to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamp] of successfulSubmissionByIp.entries()) {
+    if (now - timestamp >= ONE_MINUTE_MS) {
+      successfulSubmissionByIp.delete(ip);
+    }
+  }
+}, 60 * 1000).unref();
 
 const parseNumber = (value) => {
   const parsed = Number(value);
@@ -104,27 +115,43 @@ app.get('/api/readings/heatmap', async (req, res) => {
     });
   }
 
+  // Optimize query: calculate degree-based bounding box in JS
+  // 1 degree of latitude is ~111,000 meters.
+  // 1 degree of longitude is ~111,000 * cos(lat) meters.
+  const deltaLat = radius / 111000;
+  const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
+  const deltaLng = radius / (111000 * cosLat);
+
+  const minLng = lng - deltaLng;
+  const minLat = lat - deltaLat;
+  const maxLng = lng + deltaLng;
+  const maxLat = lat + deltaLat;
+
   try {
+    // By using the location && ST_MakeEnvelope geometry bounding box check,
+    // PostgreSQL will utilize the GiST spatial index 'readings_location_idx' on the location column,
+    // bypassing the performance penalty of casting the column to geography directly.
     const sql = `
       SELECT
         ST_Y(location) AS latitude,
         ST_X(location) AS longitude,
         decibel_level AS weight
       FROM readings
-      WHERE ST_DWithin(
-        location::geography,
-        ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-        $3
-      )
+      WHERE location && ST_MakeEnvelope($4, $5, $6, $7, 4326)
+        AND ST_DWithin(
+          location::geography,
+          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+          $3
+        )
       ${getTimeFilterClause(timeFilter)}
       ORDER BY created_at DESC
     `;
 
-    const result = await pool.query(sql, [lng, lat, radius]);
+    const result = await pool.query(sql, [lng, lat, radius, minLng, minLat, maxLng, maxLat]);
     return res.status(200).json(result.rows);
-  } catch (_error) {
+  } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('Failed to fetch heatmap readings:', _error);
+    console.error('Failed to fetch heatmap readings:', error);
     return res.status(500).json({ error: 'Failed to fetch heatmap readings.' });
   }
 });
@@ -155,13 +182,13 @@ app.get('/api/readings/report', async (req, res) => {
 
     const row = result.rows[0];
     return res.status(200).json({
-      averageDecibel: row.average_decibel === null ? null : Number(row.average_decibel),
-      peakDecibel: row.peak_decibel === null ? null : Number(row.peak_decibel),
+      averageDecibel: row.average_decibel === null ? null : Number(Number(row.average_decibel).toFixed(1)),
+      peakDecibel: row.peak_decibel === null ? null : Number(Number(row.peak_decibel).toFixed(1)),
       readingCount: row.reading_count,
     });
-  } catch (_error) {
+  } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('Failed to generate area report:', _error);
+    console.error('Failed to generate area report:', error);
     return res.status(500).json({ error: 'Failed to generate area report.' });
   }
 });
